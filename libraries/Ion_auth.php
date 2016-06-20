@@ -60,21 +60,11 @@ class Ion_auth
 	public function __construct()
 	{
 		$this->load->config('ion_auth', TRUE);
-		$this->load->library('email');
+		$this->load->library(array('email'));
 		$this->lang->load('ion_auth');
-		$this->load->helper('cookie');
-		$this->load->helper('language');
-		$this->load->helper('url');
+		$this->load->helper(array('cookie', 'language','url'));
 
-		// Load the session, CI2 as a library, CI3 uses it as a driver
-		if (substr(CI_VERSION, 0, 1) == '2')
-		{
-			$this->load->library('session');
-		}
-		else
-		{
-			$this->load->driver('session');
-		}
+		$this->load->library('session');
 
 		$this->load->model('ion_auth_model');
 
@@ -108,7 +98,14 @@ class Ion_auth
 		{
 			throw new Exception('Undefined method Ion_auth::' . $method . '() called');
 		}
-
+		if($method == 'create_user')
+		{
+			return call_user_func_array(array($this, 'register'), $arguments);
+		}
+		if($method=='update_user')
+		{
+			return call_user_func_array(array($this, 'update'), $arguments);
+		}
 		return call_user_func_array( array($this->ion_auth_model, $method), $arguments);
 	}
 
@@ -140,7 +137,8 @@ class Ion_auth
 		if ( $this->ion_auth_model->forgotten_password($identity) )   //changed
 		{
 			// Get user information
-            $user = $this->where($this->config->item('identity', 'ion_auth'), $identity)->where('active', 1)->users()->row();  //changed to get_user_by_identity from email
+      $identifier = $this->ion_auth_model->identity_column; // use model identity column, so it can be overridden in a controller
+      $user = $this->where($identifier, $identity)->where('active', 1)->users()->row();  // changed to get_user_by_identity from email
 
 			if ($user)
 			{
@@ -289,15 +287,16 @@ class Ion_auth
 	 * @return void
 	 * @author Mathew
 	 **/
-	public function register($username, $password, $email, $additional_data = array(), $group_ids = array()) //need to test email activation
+	public function register($identity, $password, $email, $additional_data = array(), $group_ids = array()) //need to test email activation
 	{
 		$this->ion_auth_model->trigger_events('pre_account_creation');
 
 		$email_activation = $this->config->item('email_activation', 'ion_auth');
+		
+		$id = $this->ion_auth_model->register($identity, $password, $email, $additional_data, $group_ids);
 
 		if (!$email_activation)
-		{
-			$id = $this->ion_auth_model->register($username, $password, $email, $additional_data, $group_ids);
+		{	
 			if ($id !== FALSE)
 			{
 				$this->set_message('account_creation_successful');
@@ -313,15 +312,18 @@ class Ion_auth
 		}
 		else
 		{
-			$id = $this->ion_auth_model->register($username, $password, $email, $additional_data, $group_ids);
-
 			if (!$id)
 			{
 				$this->set_error('account_creation_unsuccessful');
 				return FALSE;
 			}
 
+			// deactivate so the user much follow the activation flow
 			$deactivate = $this->ion_auth_model->deactivate($id);
+
+			// the deactivate method call adds a message, here we need to clear that
+			$this->ion_auth_model->clear_messages();
+
 
 			if (!$deactivate)
 			{
@@ -344,7 +346,7 @@ class Ion_auth
 			{
 				$this->ion_auth_model->trigger_events(array('post_account_creation', 'post_account_creation_successful', 'activation_email_successful'));
 				$this->set_message('activation_email_successful');
-					return $data;
+				return $data;
 			}
 			else
 			{
@@ -362,7 +364,7 @@ class Ion_auth
 					$this->set_message('activation_email_successful');
 					return $id;
 				}
-			
+
 			}
 
 			$this->ion_auth_model->trigger_events(array('post_account_creation', 'post_account_creation_unsuccessful', 'activation_email_unsuccessful'));
@@ -382,9 +384,17 @@ class Ion_auth
 		$this->ion_auth_model->trigger_events('logout');
 
 		$identity = $this->config->item('identity', 'ion_auth');
-                $this->session->unset_userdata( array($identity => '', 'id' => '', 'user_id' => '') );
 
-		//delete the remember me cookies if they exist
+                if (substr(CI_VERSION, 0, 1) == '2')
+		{
+			$this->session->unset_userdata( array($identity => '', 'id' => '', 'user_id' => '') );
+                }
+                else
+                {
+                	$this->session->unset_userdata( array($identity, 'id', 'user_id') );
+                }
+
+		// delete the remember me cookies if they exist
 		if (get_cookie($this->config->item('identity_cookie_name', 'ion_auth')))
 		{
 			delete_cookie($this->config->item('identity_cookie_name', 'ion_auth'));
@@ -394,7 +404,7 @@ class Ion_auth
 			delete_cookie($this->config->item('remember_cookie_name', 'ion_auth'));
 		}
 
-		//Destroy the session
+		// Destroy the session
 		$this->session->sess_destroy();
 
 		//Recreate the session
